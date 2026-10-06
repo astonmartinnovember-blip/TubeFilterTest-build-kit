@@ -1,0 +1,84 @@
+name: Check existing TubeFilterTest APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Download the exact artifact that Chrome flagged
+        uses: actions/download-artifact@v4
+        with:
+          name: TubeFilterTest-debug-and-source
+          run-id: '3752139098'
+          github-token: ${{ github.token }}
+          path: inspected
+
+      - name: Verify original checksums
+        working-directory: inspected
+        run: |
+          sha256sum --check SHA256SUMS.txt
+          mkdir -p ../reports
+          cp SHA256SUMS.txt ../reports/SHA256SUMS.txt
+          echo '## Original artifact checksums' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Source run: 3752139098. These are the existing binaries, not a rebuild.' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Inspect APK signatures and permissions without installing
+        shell: bash
+        run: |
+          apk_signer=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+          apk_analyzer=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)
+          test -n "$apk_signer"
+          test -n "$apk_analyzer"
+          for apk in inspected/*.apk; do
+            test -f "$apk"
+            report="reports/$(basename "$apk").txt"
+            "$apk_signer" verify --verbose --print-certs "$apk" | tee "$report"
+            "$apk_analyzer" dump badging "$apk" | tee -a "$report"
+            "$apk_analyzer" dump permissions "$apk" | tee -a "$report"
+          done
+
+      - name: Install ClamAV and update official signatures
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y clamav
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam
+          clamscan --version | tee reports/clamav-version.txt
+
+      - name: Scan the existing APK and corresponding source
+        run: |
+          set +e
+          clamscan --recursive --infected --max-filesize=128M --max-scansize=512M --max-files=100000 --alert-exceeds-max=yes --log=reports/clamav-scan.txt inspected
+          scan_result=$?
+          set -e
+          echo '## ClamAV scan of the original artifact' >> "$GITHUB_STEP_SUMMARY"
+          echo '```text' >> "$GITHUB_STEP_SUMMARY"
+          cat reports/clamav-scan.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$scan_result" -eq 0 ]; then
+            echo 'No detection by this scanner. This is not a safety guarantee and does not override the Chrome warning.' >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$scan_result" -eq 1 ]; then
+            echo 'Detection reported. Keep the original APK uninstalled while investigating.' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Scanner error. No scan verdict can be claimed.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$scan_result"
+
+      - name: Upload text inspection reports only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TubeFilterTest-inspection-reports
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
