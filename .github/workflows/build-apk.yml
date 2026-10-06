@@ -30,6 +30,8 @@ jobs:
 
       - name: Prepare Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       - name: Configure Gradle
         uses: gradle/actions/setup-gradle@v4
