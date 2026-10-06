@@ -23,11 +23,14 @@ def prepare(root: Path) -> None:
         raise RuntimeError('Could not resolve upstream app Gradle file.')
     gradle = candidates[0]
     text = gradle.read_text(encoding='utf-8')
-    # Change the application ID only; keep Java/Kotlin packages and namespace intact.
-    pattern = r'(\bapplicationId\s*(?:=\s*)?[\"\'])org\.schabi\.newpipe([\"\'])'
-    text, count = re.subn(pattern, lambda m: m[1] + PACKAGE + m[2], text)
-    if count != 1:
-        raise RuntimeError(f'Expected exactly one upstream applicationId, found {count}.')
+    # Set the Android DSL value after upstream configuration. The upstream ID
+    # may be held in a variable/version catalog rather than a string literal.
+    # Keep Java/Kotlin packages and namespace intact. This syntax works in
+    # both Groovy and Kotlin Gradle files; flavor/debug suffixes remain active.
+    text += '\n// TubeFilterTest prototype application identity\n'
+    text += 'android {\n    defaultConfig {\n'
+    text += f'        applicationId = "{PACKAGE}"\n'
+    text += '    }\n}\n'
     gradle.write_text(text, encoding='utf-8')
 
     # Change app_name resource values, including localized names. Leave credits intact.
